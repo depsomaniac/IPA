@@ -1,0 +1,176 @@
+---
+- name: IPA Client Enrollment
+  hosts: dev.reference.local
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Creating a repo
+      copy:
+        dest: "/etc/yum.repos.d/os-platform.repo"
+        content: |
+          [os-platform]
+          name=os-platform
+          baseurl=https:///os-platform
+          enabled=1
+          gpgcheck=1
+
+    - name: Upgrade all packages
+      ansible.builtin.yum:
+        name: '*'
+        state: latest
+
+    - name: Install IPA Client
+      ansible.builtin.yum:
+        name: ipa-client
+        state: latest
+    
+    - name: IPA Client Enrollment
+      command: ipa-client-install --domain dev.reference.local --server xxx.xxx.reference.local --principal admin --password 'xxxxxx' --mkhomedir --force-ntpd --unattended --force-join
+      register: reg_output
+    - debug:
+        msg: "{{ reg_output.stdout_lines |
+                 map('regex_replace','\t') |
+                 list }}"
+
+    - name: Client PAM Config Changes
+      copy: src=/home/toore/scripts/config_file_changes.sh dest=/tmp/config_file_changes.sh mode=0777
+
+    - name: Execute the script
+      command: sh /tmp/config_file_changes.sh
+      register: reg_output
+    - debug:
+        msg: "{{ reg_output.stdout_lines |
+                 map('regex_replace','\t') |
+                 list }}"
+    
+    - name: Delete config_file_changes file
+      ansible.builtin.file:
+        path: /tmp/config_file_changes.sh
+        state: absent
+        
+    - name: Create a backup directory under PAM if it does not exist
+      ansible.builtin.file:
+        path: /etc/pam.d/backup
+        state: directory
+        mode: '0755'
+
+    - name: Copy a new "password-auth" file into place, backing up the original if it differs from the copied version
+      ansible.builtin.copy:
+        src: /etc/pam.d/password-auth-ewp
+        dest: /etc/pam.d/backup/password-auth-ewp-$(date +"%m-%d-%y-%r")
+        remote_src: yes
+        owner: root
+        group: root
+        mode: preserve
+
+    - name: Copy a new "system-auth*" file into place, backing up the original if it differs from the copied version
+      ansible.builtin.copy:
+        src: /etc/pam.d/system-auth-ewp
+        dest: /etc/pam.d/backup/system-auth-ewp-$(date +"%m-%d-%y-%r")
+        remote_src: yes
+        owner: root
+        group: root
+        mode: preserve
+
+    - name: Creating a "password-auth" file
+      copy:
+        dest: "/etc/pam.d/password-auth-ewp"
+        content: |
+          #%PAM-1.0
+          # This file is auto-generated.
+          # User changes will be destroyed the next time authconfig is run.
+          auth        required      pam_env.so
+          auth        required      pam_faildelay.so delay=2000000
+          auth        [default=1 ignore=ignore success=ok] pam_succeed_if.so uid >= 1000 quiet
+          auth        [default=1 ignore=ignore success=ok] pam_localuser.so
+          auth        sufficient    pam_unix.so nullok try_first_pass
+          auth        requisite     pam_succeed_if.so uid >= 1000 quiet_success
+          auth        sufficient    pam_sss.so forward_pass
+          auth        required     pam_deny.so
+
+          account     required      pam_unix.so no_pass_expiry
+          account     sufficient    pam_localuser.so
+          account     sufficient    pam_succeed_if.so uid < 1000 quiet
+          account     [default=bad success=ok user_unknown=ignore] pam_sss.so
+          account     required      pam_permit.so
+
+          password    requisite     pam_pwquality.so try_first_pass local_users_only retry=3 authtok_type=
+          password    sufficient    pam_unix.so sha512 shadow nullok try_first_pass use_authtok
+          password    sufficient    pam_sss.so use_authtok
+          password    required     pam_pwhistory.so remember=5 no_pass_expiry
+
+          password    required     pam_deny.so
+
+          session     optional      pam_keyinit.so revoke
+          session     required      pam_limits.so
+          -session     optional      pam_systemd.so
+          session     optional      pam_oddjob_mkhomedir.so umask=0077
+          session     [success=1 default=ignore] pam_succeed_if.so service in crond quiet use_uid
+          session     required      pam_unix.so
+          session     optional      pam_sss.so
+
+    - name: Creating a "system-auth" file
+      copy:
+        dest: "/etc/pam.d/system-auth-ewp"
+        content: |
+          #%PAM-1.0
+          # This file is auto-generated.
+          # User changes will be destroyed the next time authconfig is run.
+          auth        required      pam_env.so
+          auth        required      pam_faildelay.so delay=2000000
+          auth        [default=1 ignore=ignore success=ok] pam_succeed_if.so uid >= 1000 quiet
+          auth        [default=1 ignore=ignore success=ok] pam_localuser.so
+          auth        sufficient    pam_unix.so nullok try_first_pass
+          auth        requisite     pam_succeed_if.so uid >= 1000 quiet_success
+          auth        sufficient    pam_sss.so forward_pass
+          auth        required     pam_deny.so
+
+          account     required      pam_unix.so no_pass_expiry
+          account     sufficient    pam_localuser.so
+          account     sufficient    pam_succeed_if.so uid < 1000 quiet
+          account     [default=bad success=ok user_unknown=ignore] pam_sss.so
+          account     required      pam_permit.so
+
+          password    requisite     pam_pwquality.so try_first_pass local_users_only retry=3 authtok_type=
+          password    sufficient    pam_unix.so sha512 shadow nullok try_first_pass use_authtok
+          password    sufficient    pam_sss.so use_authtok
+          password    required     pam_pwhistory.so remember=5 no_pass_expiry
+
+          password    required     pam_deny.so
+
+          session     optional      pam_keyinit.so revoke
+          session     required      pam_limits.so
+          -session     optional      pam_systemd.so
+          session     optional      pam_oddjob_mkhomedir.so umask=0077
+          session     [success=1 default=ignore] pam_succeed_if.so service in crond quiet use_uid
+          session     required      pam_unix.so
+          session     optional      pam_sss.so
+
+    - name: Create a backup directory under sssd if it does not exist
+      ansible.builtin.file:
+        path: /etc/sssd/backup
+        state: directory
+        mode: '0755'
+
+    - name: Copy a new "password-auth" file into place, backing up the original if it differs from the copied version
+      ansible.builtin.copy:
+        src: /etc/sssd/sssd.conf
+        dest: /etc/sssd/backup/sssd.conf-$(date +"%m-%d-%y-%r")
+        remote_src: yes
+        owner: root
+        group: root
+        mode: '0644'
+        backup: yes
+
+    - name: Ensure Access mode is changed in sssd
+      ansible.builtin.lineinfile:
+        path: /etc/sssd/sssd.conf
+        regexp: '^access_provider ='
+        line: access_provider = permit
+        backrefs: yes
+
+
+    - name: Restart service sssd, in all cases
+      service:
+        name: sssd
+        state: restarted
